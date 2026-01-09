@@ -1,5 +1,7 @@
 # Installing PAI
 
+Forking.
+
 > [!IMPORTANT]
 > ## This File Is For Your AI Assistant
 >
