@@ -5,7 +5,7 @@
  */
 
 import { execSync, spawn } from "child_process";
-import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlinkSync, unlinkSync, chmodSync, lstatSync, cpSync, rmSync, readlinkSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlinkSync, unlinkSync, chmodSync, lstatSync, statSync, cpSync, rmSync, readlinkSync } from "fs";
 import { homedir } from "os";
 import { join, basename, dirname } from "path";
 import type { InstallState, EngineEventHandler, DetectionResult, ExistingUserContentDetection, StepId } from "./types";
@@ -385,12 +385,15 @@ function copyMissing(src: string, dst: string): number {
   let copied = 0;
   if (!existsSync(src)) return copied;
 
-  const stat = lstatSync(src);
+  // statSync (not lstatSync) follows symlinks so a symlinked file/dir is
+  // classified by its TARGET. existsSync(src) above already returned for a
+  // broken symlink, so we never scandir a link that resolves to a file.
+  const stat = statSync(src);
   if (stat.isFile()) {
     if (!existsSync(dst)) {
       try {
         mkdirSync(dirname(dst), { recursive: true });
-        cpSync(src, dst);
+        cpSync(src, dst, { dereference: true });
         copied++;
       } catch {
         // Skip files that can't be copied (permission errors)
@@ -403,13 +406,15 @@ function copyMissing(src: string, dst: string): number {
     const srcPath = join(src, entry.name);
     const dstPath = join(dst, entry.name);
 
-    if (entry.isDirectory()) {
+    if (!existsSync(srcPath)) continue; // broken symlink — skip
+    const entryStat = statSync(srcPath); // follow symlink to its target
+    if (entryStat.isDirectory()) {
       if (!existsSync(dstPath)) mkdirSync(dstPath, { recursive: true });
       copied += copyMissing(srcPath, dstPath);
-    } else if (entry.isFile()) {
+    } else if (entryStat.isFile()) {
       if (!existsSync(dstPath)) {
         try {
-          cpSync(srcPath, dstPath);
+          cpSync(srcPath, dstPath, { dereference: true });
           copied++;
         } catch {
           // Skip files that can't be copied (permission errors)
@@ -444,7 +449,10 @@ function copyOverwriteTemplates(src: string, dst: string): { copied: number; fai
   if (!existsSync(src)) return result;
 
   try {
-    const srcStat = lstatSync(src);
+    // statSync follows symlinks so a symlinked USER entry (e.g. CONTACTS.md ->
+    // vault file) is classified by its target instead of falling through to a
+    // readdirSync that throws ENOTDIR. This was the v5.0.0 migration crash.
+    const srcStat = statSync(src);
     if (srcStat.isDirectory()) {
       if (!existsSync(dst)) mkdirSync(dst, { recursive: true });
       for (const entry of readdirSync(src, { withFileTypes: true })) {
@@ -458,7 +466,7 @@ function copyOverwriteTemplates(src: string, dst: string): { copied: number; fai
     if (!srcStat.isFile()) return result;
     if (!shouldOverwriteTemplateDestination(dst)) return result;
     mkdirSync(dirname(dst), { recursive: true });
-    cpSync(src, dst);
+    cpSync(src, dst, { dereference: true });
     result.copied++;
     return result;
   } catch {
